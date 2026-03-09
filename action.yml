@@ -1,26 +1,60 @@
-name: Release Action
-description: Automates versioning, tagging, zipping and GitHub release
-author: Fertt0
+name: 'Create Release with Version Update'
+description: 'Updates version in JSON, creates tag, and publishes GitHub Release with ZIP'
+branding:
+  icon: 'package'
+  color: 'blue'
 
 inputs:
   version:
-    description: "Version number (without v)"
+    description: 'Version number (without v prefix)'
     required: true
-
-secrets:
-  GITHUB_TOKEN:
-    required: true
+  json_file:
+    description: 'Path to JSON file to update'
+    required: false
+    default: 'ui/ui_car.json'
+  json_field:
+    description: 'Field name in JSON to update with version'
+    required: false
+    default: 'version'
+  archive_name:
+    description: 'Base name for ZIP archive (defaults to repo name without org prefix)'
+    required: false
+    default: ''
+  exclude_patterns:
+    description: 'Space-separated patterns to exclude from ZIP'
+    required: false
+    default: '.git/* .github/* .gitattributes .gitignore'
+  enable_lfs:
+    description: 'Whether to pull Git LFS files'
+    required: false
+    default: 'true'
+  commit_message:
+    description: 'Commit message template (use {TAG} placeholder)'
+    required: false
+    default: 'Release {TAG}'
+  tag_prefix:
+    description: 'Prefix for git tag'
+    required: false
+    default: 'v'
 
 runs:
-  using: "composite"
+  using: 'composite'
   steps:
-    - name: Checkout
+    - name: Checkout with LFS
+      if: inputs.enable_lfs == 'true'
       uses: actions/checkout@v4
       with:
         lfs: true
         fetch-depth: 0
 
+    - name: Checkout without LFS
+      if: inputs.enable_lfs != 'true'
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
     - name: Pull LFS files
+      if: inputs.enable_lfs == 'true'
       shell: bash
       run: git lfs pull
 
@@ -28,51 +62,67 @@ runs:
       shell: bash
       run: |
         VERSION="${{ inputs.version }}"
+        TAG="${{ inputs.tag_prefix }}$VERSION"
         echo "VERSION=$VERSION" >> $GITHUB_ENV
-        echo "TAG=v$VERSION" >> $GITHUB_ENV
-        echo "Version: $VERSION"
-        echo "Tag: $TAG"
+        echo "TAG=$TAG" >> $GITHUB_ENV
+        echo "✅ Version: $VERSION | Tag: $TAG"
 
-    - name: Update version in ui_car.json
+    - name: Update version in JSON
       shell: bash
       run: |
-        jq --arg version "$VERSION" '.version=$version' ui/ui_car.json > tmp.json
-        mv tmp.json ui/ui_car.json
+        if [ ! -f "${{ inputs.json_file }}" ]; then
+          echo "::warning::File ${{ inputs.json_file }} not found, skipping version update"
+          exit 0
+        fi
+        jq --arg version "$VERSION" '.${{ inputs.json_field }}=$version' "${{ inputs.json_file }}" > tmp.json
+        mv tmp.json "${{ inputs.json_file }}"
+        echo "✅ Updated ${{ inputs.json_field }} to $VERSION in ${{ inputs.json_file }}"
 
     - name: Commit version change
       shell: bash
       run: |
         git config user.name "github-actions"
         git config user.email "github-actions@github.com"
-        git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git
-        git add ui/ui_car.json
-        git commit -m "Release $TAG" || echo "No changes to commit"
+        git add "${{ inputs.json_file }}"
+        COMMIT_MSG="${{ inputs.commit_message }}"
+        COMMIT_MSG="${COMMIT_MSG//\{TAG\}/$TAG}"
+        git commit -m "$COMMIT_MSG" || echo "ℹ️ No changes to commit"
 
     - name: Push commit
       shell: bash
       run: git push origin HEAD
 
-    - name: Create tag
+    - name: Create and push tag
       shell: bash
       run: |
         git tag "$TAG"
         git push origin "$TAG"
+        echo "✅ Tag $TAG created and pushed"
 
-    - name: Set filename
+    - name: Set archive filename
       shell: bash
       run: |
-        FILENAME=${GITHUB_REPOSITORY#Fertt0/FTRC-}
+        if [ -n "${{ inputs.archive_name }}" ]; then
+          FILENAME="${{ inputs.archive_name }}"
+        else
+          FILENAME=${{ github.repository }}
+          FILENAME=${FILENAME#*/}  # Remove org/user prefix
+        fi
         echo "FILENAME=$FILENAME" >> $GITHUB_ENV
+        echo "✅ Archive name: $FILENAME"
 
     - name: Create ZIP archive
       shell: bash
       run: |
-        zip -r ${FILENAME}_${VERSION}.zip . -x ".git/*" ".github/*" ".gitattributes" ".gitignore"
+        EXCLUDE_ARGS=""
+        for pattern in ${{ inputs.exclude_patterns }}; do
+          EXCLUDE_ARGS="$EXCLUDE_ARGS -x \"$pattern\""
+        done
+        eval "zip -r ${FILENAME}_${VERSION}.zip . $EXCLUDE_ARGS"
+        echo "✅ Created archive: ${FILENAME}_${VERSION}.zip"
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ env.TAG }}
-        files: ${FILENAME}_${VERSION}.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        files: ${{ env.FILENAME }}_${{ env.VERSION }}.zip
