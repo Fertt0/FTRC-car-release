@@ -8,6 +8,10 @@ inputs:
   version:
     description: 'Version number (without v prefix)'
     required: true
+  token:
+    description: 'GitHub token for authentication (use github.token or PAT)'
+    required: false
+    default: ${{ github.token }}
   json_file:
     description: 'Path to JSON file to update'
     required: false
@@ -17,7 +21,7 @@ inputs:
     required: false
     default: 'version'
   archive_name:
-    description: 'Base name for ZIP archive (defaults to repo name without org prefix)'
+    description: 'Base name for ZIP archive'
     required: false
     default: ''
   exclude_patterns:
@@ -46,12 +50,14 @@ runs:
       with:
         lfs: true
         fetch-depth: 0
+        token: ${{ inputs.token }}
 
     - name: Checkout without LFS
       if: inputs.enable_lfs != 'true'
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        token: ${{ inputs.token }}
 
     - name: Pull LFS files
       if: inputs.enable_lfs == 'true'
@@ -88,6 +94,13 @@ runs:
         COMMIT_MSG="${COMMIT_MSG//\{TAG\}/$TAG}"
         git commit -m "$COMMIT_MSG" || echo "ℹ️ No changes to commit"
 
+    - name: Configure git for authenticated push
+      shell: bash
+      run: |
+        # Replace origin URL to use token for authentication
+        REPO_URL="https://x-access-token:${{ inputs.token }}@github.com/${{ github.repository }}.git"
+        git remote set-url origin "$REPO_URL"
+
     - name: Push commit
       shell: bash
       run: git push origin HEAD
@@ -106,7 +119,7 @@ runs:
           FILENAME="${{ inputs.archive_name }}"
         else
           FILENAME=${{ github.repository }}
-          FILENAME=${FILENAME#*/}  # Remove org/user prefix
+          FILENAME=${FILENAME#*/}
         fi
         echo "FILENAME=$FILENAME" >> $GITHUB_ENV
         echo "✅ Archive name: $FILENAME"
@@ -126,3 +139,5 @@ runs:
       with:
         tag_name: ${{ env.TAG }}
         files: ${{ env.FILENAME }}_${{ env.VERSION }}.zip
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
