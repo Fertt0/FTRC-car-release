@@ -1,0 +1,73 @@
+name: Release Action
+description: Automates versioning, tagging, zipping and GitHub release
+author: Fertt0
+
+inputs:
+  version:
+    description: "Version number (without v)"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        lfs: true
+        fetch-depth: 0
+
+    - name: Pull LFS files
+      shell: bash
+      run: git lfs pull
+
+    - name: Set version variables
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "TAG=v$VERSION" >> $GITHUB_ENV
+        echo "Version: $VERSION"
+        echo "Tag: $TAG"
+
+    - name: Update version in ui_car.json
+      shell: bash
+      run: |
+        jq --arg version "$VERSION" '.version=$version' ui/ui_car.json > tmp.json
+        mv tmp.json ui/ui_car.json
+
+    - name: Commit version change
+      shell: bash
+      run: |
+        git config user.name "github-actions"
+        git config user.email "github-actions@github.com"
+        git add ui/ui_car.json
+        git commit -m "Release $TAG" || echo "No changes to commit"
+
+    - name: Push commit
+      shell: bash
+      run: git push origin HEAD
+
+    - name: Create tag
+      shell: bash
+      run: |
+        git tag "$TAG"
+        git push origin "$TAG"
+
+    - name: Set filename
+      shell: bash
+      run: |
+        FILENAME=${GITHUB_REPOSITORY#Fertt0/FTRC-}
+        echo "FILENAME=$FILENAME" >> $GITHUB_ENV
+
+    - name: Create ZIP archive
+      shell: bash
+      run: |
+        zip -r ${FILENAME}_${VERSION}.zip . -x ".git/*" ".github/*" ".gitattributes" ".gitignore"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ env.TAG }}
+        files: ${FILENAME}_${VERSION}.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
